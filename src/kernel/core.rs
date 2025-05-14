@@ -171,7 +171,13 @@ where
     }
 
     /// Create an Event object from the committed `delta`.
-    fn materialise_event<C: EncodedCmd>(\n        &self,\n        command: &Command<C>,\n        delta: &StateDelta,\n        lclock_new: u64,\n        vc_new: VectorClock,\n    ) -> Result<Event, KernelError> {
+    fn materialise_event<C: EncodedCmd>(
+        &self,
+        command: &Command<C>,
+        delta: &StateDelta,
+        lclock_new: u64,
+        vc_new: VectorClock,
+    ) -> Result<Event, KernelError> {
         let new_cids: Vec<CID> = delta.new_entities.iter().map(|e| e.header.id).collect();
         let updated_cids: Vec<CID> = delta.updated_entities.iter().map(|e| e.header.id).collect();
 
