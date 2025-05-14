@@ -1,0 +1,64 @@
+name: Fuzz Testing
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    - cron: "0 3 * * *"  # nightly run at 03:00 UTC
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build fuzz container
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: fuzz/Dockerfile
+          tags: amulet-core-fuzz:latest
+          load: true  # load the image into docker cache for following steps
+
+      - name: List available fuzz targets
+        run: |
+          docker run --rm amulet-core-fuzz:latest
+
+      - name: Run fuzz targets (60-second gate each)
+        env:
+          # Use conservative RSS limit to avoid OOM on GH runners
+          FUZZ_RSS_MB: 1024
+        run: |
+          set -euo pipefail
+          TARGETS=(kernel_apply_lc kernel_apply_sig kernel_apply_authz kernel_apply_entities roundtrip_frame process_evt_causality)
+          for t in "${TARGETS[@]}"; do
+            echo "::group::Running $t"
+            docker run --rm \
+              --cpus="2" \
+              --memory="3g" \
+              -e RUSTFLAGS="-Zsanitizer=address" \
+              amulet-core-fuzz:latest \
+              /bin/bash -c "mkdir -p corpus/\"$t\" && cargo fuzz run \"$t\" -- corpus/\"$t\" seeds -max_total_time=60 -rss_limit_mb=$FUZZ_RSS_MB" || exit 1
+            echo "::endgroup::"
+          done
+
+      - name: Upload crash artifacts (if any)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: fuzz/artifacts
+          if-no-files-found: ignore 

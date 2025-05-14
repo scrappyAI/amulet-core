@@ -1,0 +1,64 @@
+[package]
+name = "amulet-core-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+amulet-core = { path = ".." }
+
+[package.metadata]
+cargo-fuzz = true
+
+[[bin]]
+name = "kernel_apply"
+path = "fuzz_targets/kernel_apply.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "kernel_process_event"
+path = "fuzz_targets/kernel_process_event.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "kernel_apply_lc"
+path = "fuzz_targets/kernel_apply_lc.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "kernel_apply_sig"
+path = "fuzz_targets/kernel_apply_sig.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "kernel_apply_authz"
+path = "fuzz_targets/kernel_apply_authz.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "kernel_apply_entities"
+path = "fuzz_targets/kernel_apply_entities.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "roundtrip_frame"
+path = "fuzz_targets/roundtrip_frame.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "process_evt_causality"
+path = "fuzz_targets/process_evt_causality.rs"
+test = false
+doc = false
+
+[toolchain]
+channel = "nightly"

@@ -1,0 +1,60 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+#
+# To use:
+# 1. Install pre-commit: `pip install pre-commit` (or `brew install pre-commit`)
+# 2. Install git hooks: `pre-commit install`
+#
+# To run against all files:
+# `pre-commit run --all-files`
+
+# Exclude generated or vendored files if any.
+# exclude: \'(^Generated/|\'^\'/vendored/)\'
+
+repos:
+-   repo: local
+    hooks:
+    -   id: rust-check
+        name: Rust Check
+        entry: cargo check --all-targets
+        language: system
+        types: [rust]
+        pass_filenames: false
+        always_run: true # Run even if no Rust files changed, as Cargo.toml might have changed
+
+    -   id: rust-fmt
+        name: Rust Format Check
+        entry: cargo fmt -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+        always_run: true
+
+    -   id: rust-clippy
+        name: Rust Clippy
+        entry: cargo clippy --all-targets -- -D warnings -W clippy::all -W clippy::pedantic -W clippy::nursery -W clippy::cargo
+        language: system
+        types: [rust]
+        pass_filenames: false
+        always_run: true
+        # Optional: If you have features, you might want to run clippy with specific feature sets
+        # args: [--features=your-feature] # or --all-features
+
+    -   id: rust-test
+        name: Rust Test
+        entry: cargo test --all-targets
+        language: system
+        types: [rust]
+        pass_filenames: false
+        always_run: true # Run even if no Rust files changed for the same reasons as cargo check
+        # Optional: If you have features, you might want to run tests with specific feature sets
+        # args: [--features=your-feature] # or --all-features
+
+# Example of using a community-maintained pre-commit hook for Rust
+# -   repo: https://github.com/doublify/pre-commit-rust
+#     rev: v1.0 # Use the latest stable tag
+#     hooks:
+#     -   id: fmt
+#     -   id: clippy
+#     -   id: cargo-check
+#     # Note: 'test' hook might be better run as local if it has specific needs or is slow.
