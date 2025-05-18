@@ -33,6 +33,7 @@ impl EncodedState for Vec<u8> {
 // Entity header & container
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntityHeader {
     pub id: CID,
@@ -41,6 +42,7 @@ pub struct EntityHeader {
     pub parent: Option<CID>,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entity<E: EncodedState> {
     pub header: EntityHeader,

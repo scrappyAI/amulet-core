@@ -39,7 +39,7 @@ proptest! {
     #[test]
     fn prop_refuse_when_local_lc_max(command_lc in any::<u64>()) {
         let replica_id: ReplicaID = [9u8; 16];
-        let mut kernel = Kernel::<PlaceholderCryptoProvider>::new_with_default_crypto(replica_id);
+        let mut kernel = Kernel::<PlaceholderCryptoProvider>::new_with_default_crypto(replica_id, false);
         kernel.local_lc = u64::MAX; // Simulate overflow state
 
         let cap_cid: CID = [3u8; 32];

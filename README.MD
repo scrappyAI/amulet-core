@@ -14,36 +14,54 @@ It provides a minimal and formal substrate upon which complex behaviors in domai
 
 ## 📊 Core Primitives
 
-At the heart of Amulet-Core lies a strict, irreducible set of **three** system primitives. These primitives are designed to comprehensively model interactions by capturing **who** (Entities, Capability holders) can perform **what** actions (Commands representing defined operations) on **what** resources (Entities), **when** (as Commands are processed and resulting Events are timestamped with logical clocks), and **under what authority** (Capabilities). They form the ontology for interacting with and evolving state:
+At the heart of Amulet-Core lies a strict, irreducible set of data structures and the kernel logic that processes them. These are designed to comprehensively model interactions by capturing **who** can do **what**, **when**, **where**, **under what authority/why**, and **how**. They form the foundational ontology for interacting with and evolving state:
 
 ### 1. `Entity`
 
-A self-contained, persistent object with isolated state.
+A self-contained, persistent object with isolated state, versioned immutably. Changes result in new versions.
 
-*   Represents the "who" (if an active agent) or "what" (if a passive resource or data).
-*   Examples: accounts, contracts, legal documents, digital assets, user identities, autonomous agents.
-*   Entities are versioned immutably; changes result in new versions.
+*   **What (Content & Identity):** Represents a resource, data, or an active agent. Its `id: CID` provides stable identity, while its `body: EncodedState` holds its specific content (opaque to the kernel).
+*   **When (Created/Updated):** `header.lclock` (Lamport time) and `header.version` track its evolution.
+*   **Why/Where from (Causal Link):** `header.parent: Option<CID>` can link it to a originating entity.
+*   **Who (Actor if active, Subject if passive):** Defined by its role in the system, often identified by its `id`.
+*   Examples: accounts, contracts, digital assets, user identities, autonomous agents.
 
 ### 2. `Capability`
 
-The core enforcement mechanism of authority and permission.
+The core enforcement mechanism of authority and permission. It explicitly grants rights.
 
-*   Represents "under what authority" an action can be performed.
-*   Capabilities determine what operations an entity (identified by its public key or other holder identifier) can perform on other entities or the system itself.
-*   Capability-based security ensures **no ambient authority**; only explicit rights.
-*   Capabilities can be granted or revoked and are enforced at the kernel level during command processing.
+*   **Under What Authority/Why (Authorization):** Defines *why* an action is permitted. Its `id: CID` is unique.
+*   **Who (Holder & Grantor):** `holder: PublicKey` identifies the actor authorized to use the capability. The grantor is implicit (the entity that issued the capability via a command).
+*   **What (Permitted Actions & Target):** `rights: RightsMask` specify the allowed operations (e.g., READ, WRITE), and `target_entity: CID` defines the specific entity these rights apply to.
+*   **When (Validity):** `expiry_lc: Option<u64>` provides an optional Lamport clock-based expiration.
+*   **How (Integrity & Uniqueness):** `alg_suite: AlgSuite` specifies crypto, `signature: Signature` (on the capability issuance command, not stored on cap itself but validated by kernel) ensures authenticity, and `nonce: u64` helps prevent replay of issuance or can be used in commands.
+*   Crucially, capability-based security ensures **no ambient authority**; all actions require explicit, verifiable rights.
 
 ### 3. `Command`
 
-The atomic instruction for state transition.
+The cryptographically signed, atomic instruction for initiating a state transition.
 
-*   Represents the "what" (the specific operation to be performed) and implies the "when" (the logical time of intent).
-*   `Command`s are cryptographically signed inputs that specify an intended operation (e.g., create entity, update entity, transfer capability, invoke an entity method).
-*   They encapsulate the caller's intent, the necessary authority (`Capability` CID), and the operation payload. Optionally, payload can include metadata for "why".
-*   The kernel processes `Command`s. If valid and authorized, a `Command` leads to changes in system state, which are then recorded as one or more `Event`s.
-*   `Event`s are the immutable, auditable output of the kernel, representing committed state changes and definitively recording "what" happened and "when" (via logical clocks).
+*   **What (Intended Action):** The `payload: EncodedCmd` specifies the operation (e.g., create entity, update entity). Its `id: CID` is unique.
+*   **Who (Initiator/Actor):** Implicitly the signer of the command, who must be the `capability.holder`.
+*   **Under What Authority/Why (Authorization):** `capability: CID` links to the `Capability` granting rights for this action.
+*   **When (Proposed Time):** `lclock: u64` is the Lamport time proposed by the originator.
+*   **Where (Origin):** `replica: ReplicaID` indicates the replica that first processed this command.
+*   **How (Integrity & Security):** `signature: Signature` (by `capability.holder`) and `alg_suite: AlgSuite` ensure authenticity and define cryptographic methods.
+*   The kernel processes `Command`s. If valid and authorized, a `Command` leads to changes in system state, recorded as `Event`(s).
 
-> No state-altering operation may occur without a valid `Command`. No `Command` is processed without a valid `Capability` granting sufficient rights.
+### 4. `Event`
+
+The immutable, auditable record of a committed state change, generated by the kernel.
+
+*   **What (Happened - Effect):** `new_entities: Vec<CID>` and `updated_entities: Vec<CID>` list the CIDs of entities created or changed. The `id: CID` uniquely identifies the event.
+*   **Why (Cause):** `caused_by: CID` links directly to the `Command` that triggered this state change.
+*   **When (Committed Time):** `lclock: u64` (kernel-assigned Lamport time) and an optional `vector_clock: VectorClock` definitively timestamp the event.
+*   **Where (Committed Location):** `replica: ReplicaID` identifies the kernel instance that generated the event.
+*   **Who (Actor):** Traceable via `caused_by` (Command) to the `Capability` holder.
+*   **How (Context):** `alg_suite: AlgSuite` (inherited or determined by kernel) and `additional_fields` for forward compatibility.
+*   `Event`s form the verifiable log of all operations, providing the ultimate source of truth for state transitions.
+
+> No state-altering operation may occur without a valid `Command`. No `Command` is processed without a valid `Capability` granting sufficient rights. The resulting state changes are immutably recorded as `Event`s.
 
 ---
 

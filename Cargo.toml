@@ -15,6 +15,7 @@ sha3 = "0.10"
 p256 = { version = "0.13", features = ["ecdsa"] }
 ecdsa = { version = "0.16", features = ["der"] }
 tracing = "0.1"
+serde = { version = "1.0", features = ["derive"], optional = true }
 
 [dependencies.criterion]
 version = "0.5"
@@ -27,6 +28,8 @@ proptest = "1.4"
 bench = ["criterion"]
 compat-primitives = []
 telemetry = ["tracing/std", "dep:tracing-subscriber"]
+default = []
+serde = ["dep:serde"]
 
 [dependencies.tracing-subscriber]
 version = "0.3"

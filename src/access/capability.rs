@@ -1,6 +1,7 @@
 use crate::types::{AlgSuite, CID, PublicKey, RightsMask, Signature};
 
 /// Grants a `holder` specific rights over a `target_entity`.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capability {
     pub id: CID,

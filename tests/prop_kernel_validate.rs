@@ -44,7 +44,7 @@ impl EncodedCmd for DummyCmdPayload {
 
 fn create_test_kernel() -> Kernel<PlaceholderCryptoProvider> {
     let replica_id: ReplicaID = [0u8; 16];
-    Kernel::<PlaceholderCryptoProvider>::new_with_default_crypto(replica_id)
+    Kernel::<PlaceholderCryptoProvider>::new_with_default_crypto(replica_id, false)
 }
 
 fn create_dummy_capability(id: CID, alg_suite: AlgSuite, rights: RightsMask, expiry_lc: Option<u64>) -> Capability {

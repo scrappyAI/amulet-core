@@ -15,6 +15,7 @@ use crate::time::vector as vector_clock; // Vector-clock utilities
 use crate::crypto::{CryptoProvider, Hasher, Verifier, PlaceholderCryptoProvider}; // Crypto traits & placeholder provider
 use std::marker::PhantomData; // Marker type for CP
 use crate::kernel::runtime::{Runtime, DefaultRuntime};
+use std::collections::BTreeMap; // Added for additional_fields in Event
 
 /// Represents the changes to the system state resulting from a command.
 /// This is the `delta` referred to in the kernel specification.
@@ -28,6 +29,7 @@ pub struct StateDelta {
 
 /// Represents the authoritative state (Σ) of the Amulet kernel.
 /// This includes the append-only event log and materialised views of entities and capabilities.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Default)]
 pub struct SystemState {
     /// Materialised view of capabilities, mapping CID → Capability.
@@ -61,10 +63,10 @@ where
     R: Runtime<CP> + Clone + std::fmt::Debug,
 {
     /// Creates a new Kernel instance.
-    pub fn new(replica_id: ReplicaID, runtime: R, _crypto_provider_param: CP) -> Self {
+    pub fn new(replica_id: ReplicaID, runtime: R, _crypto_provider_param: CP, enable_vector_clocks: bool) -> Self {
         Kernel {
             local_lc: 0,
-            local_vc: if true { Some(HashMap::new()) } else { None },
+            local_vc: if enable_vector_clocks { Some(HashMap::new()) } else { None },
             state: SystemState::default(),
             replica_id,
             runtime,
@@ -77,9 +79,82 @@ where
         CP::hash(data, alg_suite).map_err(KernelError::CryptoError)
     }
 
+    /// Appends the identity fields of an event to a byte vector for digest calculation.
+    /// These fields include the command that caused the event, the event's Lamport clock,
+    /// the ID of the replica that generated the event, and the algorithm suite used.
+    #[doc(hidden)] // Internal helper, not part of public direct-call API
+    fn append_event_identity_for_digest(
+        bytes: &mut Vec<u8>,
+        caused_by_command_id: &CID,
+        event_lclock: u64,
+        event_replica_id: &ReplicaID,
+        event_alg_suite: AlgSuite,
+    ) {
+        bytes.extend_from_slice(caused_by_command_id);
+        bytes.extend_from_slice(&event_lclock.to_le_bytes());
+        bytes.extend_from_slice(event_replica_id);
+        bytes.push(event_alg_suite as u8);
+    }
+
+    /// Appends a slice of CIDs to a byte vector in a deterministic (sorted) manner for digest calculation.
+    /// This is used for lists of new or updated entities.
+    #[doc(hidden)] // Internal helper
+    fn append_cids_for_digest(bytes: &mut Vec<u8>, cids: &[CID]) {
+        let mut sorted_cids = cids.to_vec();
+        sorted_cids.sort_unstable(); // Sort for deterministic output
+        for cid in sorted_cids {
+            bytes.extend_from_slice(&cid);
+        }
+    }
+
+    /// Appends a VectorClock to a byte vector in a deterministic manner for digest calculation.
+    /// The VectorClock, if present, is marked with a `1u8` prefix, followed by its entries sorted by ReplicaID.
+    /// If absent, a `0u8` prefix is used.
+    #[doc(hidden)] // Internal helper
+    fn append_vector_clock_for_digest(bytes: &mut Vec<u8>, vector_clock: &VectorClock) {
+        if let Some(vc_map) = vector_clock {
+            bytes.push(1); // Indicate presence of VectorClock
+            let mut vc_entries: Vec<(&ReplicaID, &u64)> = vc_map.iter().collect();
+            // Sort entries by ReplicaID for deterministic output
+            vc_entries.sort_unstable_by_key(|(k, _)| *k);
+            for (replica_id, lclock_val) in vc_entries {
+                bytes.extend_from_slice(replica_id);
+                bytes.extend_from_slice(&lclock_val.to_le_bytes());
+            }
+        } else {
+            bytes.push(0); // Indicate absence of VectorClock
+        }
+    }
+
+    /// Appends additional fields (a BTreeMap<String, Vec<u8>>) to a byte vector 
+    /// in a deterministic manner for digest calculation.
+    /// BTreeMap ensures keys are sorted. Lengths of keys and values are also included.
+    /// The fields, if present, are marked with a `1u8` prefix; otherwise, a `0u8` prefix is used.
+    #[doc(hidden)] // Internal helper
+    fn append_additional_fields_for_digest(
+        bytes: &mut Vec<u8>,
+        additional_fields: &Option<BTreeMap<String, Vec<u8>>>,
+    ) {
+        if let Some(fields_map) = additional_fields {
+            bytes.push(1); // Indicate presence of additional_fields
+            // BTreeMap iterates in key-sorted order, ensuring determinism here.
+            for (key, value) in fields_map {
+                bytes.extend_from_slice(key.as_bytes());
+                // Store key length as u32, little-endian
+                bytes.extend_from_slice(&(key.as_bytes().len() as u32).to_le_bytes()); 
+                bytes.extend_from_slice(value);
+                // Store value length as u32, little-endian
+                bytes.extend_from_slice(&(value.len() as u32).to_le_bytes()); 
+            }
+        } else {
+            bytes.push(0); // Indicate absence of additional_fields
+        }
+    }
+
     /// Helper to deterministically serialise event fields for CID generation.
+    /// This function now orchestrates calls to more specific append helpers.
     fn get_event_hash_input(
-        &self,
+        &self, // Remains to potentially access self.crypto_provider if needed, though not currently used here
         caused_by_command_id: &CID,
         event_lclock: u64,
         event_replica_id: &ReplicaID,
@@ -87,42 +162,36 @@ where
         new_entities_cids: &[CID],
         updated_entities_cids: &[CID],
         vector_clock: &VectorClock,
+        additional_fields: &Option<BTreeMap<String, Vec<u8>>>,
     ) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(caused_by_command_id);
-        bytes.extend_from_slice(&event_lclock.to_le_bytes());
-        bytes.extend_from_slice(event_replica_id);
-        bytes.push(event_alg_suite as u8);
 
-        // Serialise CIDs deterministically (sorted).
-        let mut sorted_new = new_entities_cids.to_vec();
-        sorted_new.sort_unstable();
-        for cid in sorted_new {
-            bytes.extend_from_slice(&cid);
-        }
-        let mut sorted_updated = updated_entities_cids.to_vec();
-        sorted_updated.sort_unstable();
-        for cid in sorted_updated {
-            bytes.extend_from_slice(&cid);
-        }
+        // Append event identity fields
+        Self::append_event_identity_for_digest(
+            &mut bytes, 
+            caused_by_command_id, 
+            event_lclock, 
+            event_replica_id, 
+            event_alg_suite
+        );
 
-        // Serialise VectorClock deterministically.
-        if let Some(vc_map) = vector_clock {
-            bytes.push(1);
-            let mut vc_entries: Vec<(&ReplicaID, &u64)> = vc_map.iter().collect();
-            vc_entries.sort_unstable_by_key(|(k, _)| *k);
-            for (replica_id, lclock_val) in vc_entries {
-                bytes.extend_from_slice(replica_id);
-                bytes.extend_from_slice(&lclock_val.to_le_bytes());
-            }
-        } else {
-            bytes.push(0);
-        }
+        // Append CIDs for new entities (sorted)
+        Self::append_cids_for_digest(&mut bytes, new_entities_cids);
+
+        // Append CIDs for updated entities (sorted)
+        Self::append_cids_for_digest(&mut bytes, updated_entities_cids);
+
+        // Append VectorClock (sorted entries, if present)
+        Self::append_vector_clock_for_digest(&mut bytes, vector_clock);
+
+        // Append additional fields (sorted by BTreeMap, if present)
+        Self::append_additional_fields_for_digest(&mut bytes, additional_fields);
+        
         bytes
     }
 
     /// Append the `delta` into Σ, checking basic invariants.
-    fn append_delta(&mut self, delta: &StateDelta, lclock_new: u64) -> Result<(), KernelError> {
+    pub fn append_delta(&mut self, delta: &StateDelta, lclock_new: u64) -> Result<(), KernelError> {
         // 1. CID uniqueness for new entities.
         for ent in &delta.new_entities {
             if self.state.entities.contains_key(&ent.header.id) {
@@ -181,6 +250,10 @@ where
         let new_cids: Vec<CID> = delta.new_entities.iter().map(|e| e.header.id).collect();
         let updated_cids: Vec<CID> = delta.updated_entities.iter().map(|e| e.header.id).collect();
 
+        // For a newly materialised event, additional_fields is None as it's not carrying
+        // unknown fields from another source yet.
+        let additional_fields: Option<BTreeMap<String, Vec<u8>>> = None;
+
         let input = self.get_event_hash_input(
             &command.id,
             lclock_new,
@@ -189,6 +262,7 @@ where
             &new_cids,
             &updated_cids,
             &vc_new,
+            &additional_fields,
         );
         let event_id = self.generate_cid(&input, command.alg_suite)?;
 
@@ -201,6 +275,7 @@ where
             new_entities: new_cids,
             updated_entities: updated_cids,
             vector_clock: vc_new,
+            additional_fields,
         })
     }
 
@@ -283,40 +358,39 @@ where
             ));
         }
 
-        // 1. validate(cmd)
+        // 1. validate(cmd) (Kernel Spec §2.3)
         self.validate_command(command, self.local_lc)?;
 
-        // 2. lclock_new = max(cmd.lclock, local_lc + 1)
+        // 2. lclock_new = max(cmd.lclock, local_lc + 1) (Kernel Spec §3, §7.1.3)
         let lclock_new = command.lclock.max(self.local_lc + 1);
 
-        // 3. delta ← runtime(cmd)
+        // 3. delta ← runtime(cmd) (Kernel Spec §3, §5)
         let delta = self.runtime.execute(&self.state, command)?;
 
-        // 5. Σ.append(delta, lclock_new)
+        // 4. Σ.append(delta, lclock_new) (Kernel Spec §3) 
+        //    (includes invariant checks: delta.respects_invariants() is implicitly checked by append_delta)
         self.append_delta(&delta, lclock_new)?;
 
-        // 6. local_lc = lclock_new
+        // 5. local_lc = lclock_new (Kernel Spec §3)
         self.local_lc = lclock_new;
 
-        // 7. vc = merge_vector_clock(cmd)  (simplified: always Some(vc) if feature enabled)
-        let mut final_vc: HashMap<ReplicaID, u64> = self
-            .local_vc
-            .clone()
-            .unwrap_or_else(HashMap::new);
-        if self.local_vc.is_some() {
-            final_vc.insert(self.replica_id, lclock_new);
-            self.local_vc = Some(final_vc.clone());
-        }
-        let vc_for_event = if self.local_vc.is_some() {
-            Some(final_vc)
+        // 6. Update local vector clock for the new event (Kernel Spec §7.4.1 Increment rule)
+        //    "On Event creation, set vc[replica] = event.lclock."
+        let vc_for_event: Option<HashMap<ReplicaID, u64>>;
+        if let Some(current_local_vc_map) = &mut self.local_vc {
+            // If VCs are enabled, update the kernel's own VC map
+            current_local_vc_map.insert(self.replica_id, lclock_new);
+            // The event gets a clone of this newly updated VC map
+            vc_for_event = Some(current_local_vc_map.clone());
         } else {
-            None
-        };
+            // VCs are not enabled for this kernel
+            vc_for_event = None;
+        }
 
-        // 8. materialise_event
+        // 7. materialise_event (Kernel Spec §3)
         let event = self.materialise_event(command, &delta, lclock_new, vc_for_event)?;
 
-        // Log the event locally.
+        // Log the event locally (persisting to Σ.event_log).
         self.state.event_log.push(event.clone());
 
         Ok(event)
@@ -337,7 +411,7 @@ where
 
 impl Kernel<PlaceholderCryptoProvider, DefaultRuntime> {
     /// Convenience constructor used heavily in tests.
-    pub fn new_with_default_crypto(replica_id: ReplicaID) -> Self {
-        Self::new(replica_id, DefaultRuntime::default(), PlaceholderCryptoProvider::default())
+    pub fn new_with_default_crypto(replica_id: ReplicaID, enable_vector_clocks: bool) -> Self {
+        Self::new(replica_id, DefaultRuntime::default(), PlaceholderCryptoProvider::default(), enable_vector_clocks)
     }
 } 
