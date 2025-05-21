@@ -76,4 +76,44 @@ impl CryptoProvider for PlaceholderCryptoProvider {
         // DO NOT USE IN PRODUCTION.
         Ok(())
     }
+}
+
+#[cfg(test)]
+pub mod test_utils {
+    use super::*; // Imports CryptoProvider, CryptoError, AlgSuite, PlaceholderCryptoProvider, etc.
+    use crate::primitives::{PublicKey, Signature};
+
+    /// A mock CryptoProvider for testing purposes where cryptographic outcomes can be configured.
+    #[derive(Debug, Clone)]
+    pub struct ConfigurableCryptoProvider {
+        /// The result that the `verify` method should return.
+        pub verification_outcome: Result<(), CryptoError>,
+        /// The result that the `hash` method should return. Defaults to a fixed array.
+        pub hash_outcome: Result<[u8; 32], CryptoError>,
+    }
+
+    impl Default for ConfigurableCryptoProvider {
+        fn default() -> Self {
+            Self {
+                verification_outcome: Ok(()), // Default to successful verification
+                hash_outcome: Ok([0u8; 32]), // Default to a fixed hash
+            }
+        }
+    }
+
+    impl CryptoProvider for ConfigurableCryptoProvider {
+        fn hash(&self, _data: &[u8], _alg_suite: AlgSuite) -> Result<[u8; 32], CryptoError> {
+            self.hash_outcome.clone() // Return the configured hash outcome
+        }
+
+        fn verify(
+            &self,
+            _data_to_verify: &[u8],
+            _signature: &Signature,
+            _holder_public_key: &PublicKey,
+            _alg_suite: AlgSuite,
+        ) -> Result<(), CryptoError> {
+            self.verification_outcome.clone() // Return the configured verification outcome
+        }
+    }
 } 
