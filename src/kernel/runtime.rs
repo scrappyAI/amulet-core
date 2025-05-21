@@ -8,7 +8,8 @@
 //! At present we provide a `DefaultRuntime` that performs no state mutation –
 //! suitable for unit tests and as a template for real runtimes added in Phase-2.
 
-use crate::domain::{Command, EncodedCmd};
+use crate::primitives::Command;
+use crate::command_traits::EncodedCmd;
 use crate::kernel::core::StateDelta;
 use crate::kernel::core::SystemState;
 use crate::crypto::CryptoProvider;

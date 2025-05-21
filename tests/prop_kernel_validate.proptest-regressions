@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc f5e93eeb9892b96daf1bcbdd8d938729a327819525e375e12ee95df2b761b074 # shrinks to capability_rights = 124493824, required_rights_val = 9

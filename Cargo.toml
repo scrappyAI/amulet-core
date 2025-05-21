@@ -8,14 +8,28 @@ name = "amulet_core"
 path = "src/lib.rs"
 
 [dependencies]
-blake3 = "1.5"
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-rand = "0.8"
-sha3 = "0.10"
-p256 = { version = "0.13", features = ["ecdsa"] }
-ecdsa = { version = "0.16", features = ["der"] }
-tracing = "0.1"
-serde = { version = "1.0", features = ["derive"], optional = true }
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+uuid = { version = "1.8.0", features = ["v4", "serde"] } # serde feature for KeyId if it becomes Uuid directly
+
+# Generic array, pinned to a version compatible with crypto crates
+generic-array = "0.14.7"
+
+# Serialization
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.115"
+serde_bytes = "0.11"
+
+# Error handling
+thiserror = "1.0.58" # For KmsError if you use #[from] or complex error sources
+
+# ADDED: Tracing as an optional dependency
+tracing = "0.1" # Now a regular dependency
+
+der = "0.7.6" # Added der as a direct dependency
+
+# Utilities
+# Add other utilities like zeroize if you implement secure memory wiping for keys
+# zeroize = { version = "1.7.0", features = ["alloc"] }
 
 [dependencies.criterion]
 version = "0.5"
@@ -23,13 +37,12 @@ optional = true
 
 [dev-dependencies]
 proptest = "1.4"
+tempfile = "3.10.1" # For tests
 
 [features]
 bench = ["criterion"]
 compat-primitives = []
-telemetry = ["tracing/std", "dep:tracing-subscriber"]
 default = []
-serde = ["dep:serde"]
 
 [dependencies.tracing-subscriber]
 version = "0.3"

@@ -1,12 +1,17 @@
-Amulet-Core • Kernel Specification • v0.4 (2025-05-10)
+Amulet-Core • Kernel Specification • v0.5 (2025-05-21)
 
-Status: Draft — integrates peer review (2025-05-09). Major fixes: clock monotonicity under network re-ordering, overflow behaviour, vector-clock merge rules, hybrid-signature semantics, and clarified conformance gates.
+Status: Draft — v0.5 changes integrating SpecPlan recommendations (2025-05-21). Key changes: Vector clocks mandatory, crypto suites moved to companion spec, Capability.kind added, Rights bits policy updated.
 
 ⸻
 
 Changelog
 
 Ver	Date	Highlights
+0.5	2025-05-21	• Vector clocks mandatory (field no longer Option).
+			• Command remains canonical; Operation is alias.
+			• Crypto suites moved to companion spec "Amulet-Crypto".
+			• Capability.kind (u16) reserved for overlay use.
+			• Rights bits 0-4 frozen; expansion policy documented.
 0.4	2025-05-10	• Relaxed Lamport monotonicity rule (≥).
 • Defined overflow behaviour.		
 • Added normative rights algebra stub.		
@@ -23,7 +28,7 @@ Ver	Date	Highlights
 
 0 Executive Summary
 
-Amulet-Core is a deterministic micro-kernel for economic state. v0.4 tightens logical-time semantics and compliance surfaces while keeping wire compatibility with v0.3.
+Amulet-Core is a deterministic micro-kernel for economic state. v0.5 makes vector clocks mandatory, moves detailed cryptographic suite definitions to a companion specification ("Amulet-Crypto"), introduces `Capability.kind` for overlay semantics, and formalizes the rights bit allocation policy. These changes enhance clarity and focus the kernel on its core task of ordered event emission, while maintaining wire compatibility where possible (vector_clock field is now non-optional).
 
 ⸻
 
@@ -32,8 +37,9 @@ Amulet-Core is a deterministic micro-kernel for economic state. v0.4 tightens lo
 	•	Σ   authoritative state (append-only Event log + materialised views).
 	•	CID 32-byte content address (hash(bytes)).
 	•	lclock Lamport logical counter (u64).
+	•	VClock Vector Clock (HashMap<ReplicaID, u64>).
 	•	ReplicaID 128-bit UUID (collision-free domain).
-	•	alg_suite algorithm profile (§4).
+	•	alg_suite_tag `u8` tag referencing an algorithm profile defined in "Amulet-Crypto" spec (§4).
 
 ⸻
 
@@ -47,7 +53,7 @@ struct EntityHeader {
     lclock: u64,       // Lamport time at creation/update
     parent: Option<CID>,
 }
-struct Entity<E: EncodedState> { header: EntityHeader, body: E }
+struct Entity<E> { header: EntityHeader, body: E } // E is an opaque, runtime-defined state type
 
 Invariants
 	1.	Version monotonicity — versionₙ₊₁ = versionₙ + 1 within an Entity.
@@ -60,39 +66,42 @@ Invariants
 
 struct Capability {
     id: CID,
-    alg_suite: AlgSuite,
+    alg_suite_tag: u8,     // Tag for crypto suite (defined in Amulet-Crypto spec)
     holder: PublicKey,
     target_entity: CID,
     rights: RightsMask,        // see §6
     nonce: u64,
     expiry_lc: Option<u64>,
+    kind: u16,               // Reserved for overlay semantics (e.g., capability type)
     signature: Signature,
 }
 
 Invariants
 	1.	If expiry_lc set ⇒ current_lc < expiry_lc.
-	2.	signature verifies under alg_suite.
+	2.	signature verifies under the algorithm suite indicated by `alg_suite_tag` (see §4).
 
 ⸻
 
 2.3 Command
 
-struct Command<C: EncodedCmd> {
+struct Command<P> { // P is an opaque, runtime-defined payload type
     id: CID,
-    alg_suite: AlgSuite,
+    alg_suite_tag: u8,     // Tag for crypto suite
     replica: ReplicaID,
     capability: CID,
     lclock: u64,            // proposed Lamport time
-    payload: C,
+    payload: P,
     signature: Signature,   // by capability.holder
 }
+// `Operation<P>` is a common alias for `Command<P>` in higher-level code.
 
 Validation
 
 validate(cmd) → Result
     assert Σ.contains(cmd.capability)
-    assert cmd.alg_suite == Σ[cmd.capability].alg_suite
-    assert verify(cmd.signature, cmd.payload, cmd.alg_suite)
+    cap ← Σ[cmd.capability]
+    assert cmd.alg_suite_tag == cap.alg_suite_tag // Ensure command and capability use same suite context
+    assert verify(cmd.signature, cmd.payload, cmd.alg_suite_tag) // Verification uses the tag
     assert rights_sufficient(cmd)          // §6
     assert cmd.lclock >= local_lc          // relaxed to ≥
 
@@ -103,14 +112,14 @@ validate(cmd) → Result
 
 struct Event {
     id: CID,
-    alg_suite: AlgSuite,
+    alg_suite_tag: u8,     // Tag for crypto suite, from Command
     replica: ReplicaID,
     caused_by: CID,      // Command.id
     lclock: u64,         // assigned by kernel
+    vclock: VClock,      // MANDATORY: Vector clock (HashMap<ReplicaID, u64>)
     new_entities: Vec<CID>,
     updated_entities: Vec<CID>,
-    vector_clock: Option<HashMap<ReplicaID, u64>>,  // if enabled
-    // Unknown future fields MUST be preserved bit-exact when relayed.
+    reserved: Vec<u8>,   // Unknown future fields MUST be preserved bit-exact when relayed.
 }
 
 Events are append-only.
@@ -126,25 +135,26 @@ apply(cmd) → Event
     assert delta.respects_invariants()
     Σ.append(delta, lclock_new)
     local_lc = lclock_new
-    vc = merge_vector_clock(cmd)          // if §7.4 enabled
-    return materialise_event(delta, lclock_new, vc)
+    vc = merge_vector_clock(local_vc, cmd.vclock_if_present) // Or however command contributes to VC merge
+                                          // Kernel ensures event.vclock is updated (§7.4)
+    return materialise_event(delta, lclock_new, vc) // vc is the new, authoritative VClock for the event
 
 
 ⸻
 
 4 Cryptographic Suites
 
-enum AlgSuite { CLASSIC, FIPS, PQC, HYBRID }
+(Note: Full cryptographic suite definitions, including specific algorithms for hashing and signatures for each suite, are now detailed in the companion "Amulet-Crypto" specification. The `alg_suite_tag: u8` field in core data structures (Event, Command, Capability) is a tag that refers to these externally defined suites.)
 
-Suite	Hash→CID	Signature(s)	Compliance
-CLASSIC	BLAKE3-256¹	Ed25519	Best-effort
-FIPS	SHA-3-256	ECDSA-P-256	FIPS-140-3
-PQC	SHAKE-256	Dilithium-L3	CNSA 2.0
-HYBRID	SHA-3-256 · SHAKE-256	Ed25519 · Dilithium-L3	Transition
+Primary `alg_suite_tag` values (examples, see Amulet-Crypto spec for normative list):
+	•	`0`: CLASSIC (e.g., BLAKE3-256, Ed25519)
+	•	`1`: FIPS (e.g., SHA-3-256, ECDSA-P-256)
+	•	`2`: PQC (e.g., SHAKE-256, Dilithium-L3)
+	•	`3`: HYBRID (e.g., SHA-3-256 + SHAKE-256, Ed25519 + Dilithium-L3)
 
-¹ BLAKE3 is not FIPS approved; deploy FIPS/PQC suites for regulated environments.
+Hybrid verification rule — (Moved to Amulet-Crypto spec) Until 2031-12-31, for HYBRID suite, both constituent signatures MUST verify; afterwards the PQC signature alone suffices. Implementations SHOULD emit dual signatures until that date.
 
-Hybrid verification rule — Until 2031-12-31, both signatures MUST verify; afterwards Dilithium alone suffices. Implementations SHOULD emit dual signatures until that date.
+¹ BLAKE3 is not FIPS approved; use FIPS/PQC suites for regulated environments.
 
 ⸻
 
@@ -159,8 +169,13 @@ Violations are a conformance failure.
 
 6 Rights Algebra (normative stub)
 
-RightsMask is a 32-bit field; bits 0-15 are core (READ, WRITE, DELEGATE, ISSUE, REVOKE).
+RightsMask is a 32-bit field.
+	•	Bits 0-4 are core kernel rights (READ, WRITE, DELEGATE, ISSUE, REVOKE). These are frozen.
+	•	Bits 5-15 are reserved for future kernel-level needs (e.g., audit, seal, proof generation).
+	•	Bits 16-31 are available for domain-specific overlays (e.g., finance, logistics specific rights).
+
 rights_sufficient(cmd) evaluates (cap.rights & required_bits(cmd.payload)) == required_bits(cmd.payload).
+The function `required_bits(cmd.payload)` is defined by the runtime layer interpreting the opaque payload `P`.
 Full algebra lives in rights.md (forthcoming).
 
 ⸻
@@ -180,33 +195,34 @@ May be stored as metadata; MUST NOT influence ordering.
 
 7.3 Logical Expiry
 
-expiry_lc is compared against receiver’s local_lc after merge; thus unaffected by clock skew.
+expiry_lc is compared against receiver's local_lc after merge; thus unaffected by clock skew.
 
-7.4 Vector-Clock Extension (optional)
-	•	Increment — On Event creation, set vc[replica] = event.lclock.
-	•	Merge — On receipt, local_vc[r] = max(local_vc.get(r), incoming_vc[r]) for each entry.
-	•	Compare — Standard partial-order: vc1 ≤ vc2 iff ∀r  vc1[r] ≤ vc2[r]. Concurrency when neither ≤ holds.
-Vector clocks allow conflict detection but are not required for core safety.
+7.4 Vector Clock (Mandatory)
+	•	Structure — `Event.vclock` is a `VClock` (HashMap<ReplicaID, u64>).
+	•	Increment — On Event creation by replica `R` with Lamport time `L`: `event.vclock[R] = L`. If `R` is not in its own clock, it's added. Other entries are merged from the causal command or previous local state.
+	•	Merge — On receiving an Event `E`, the local vector clock `local_vc` is updated: for each `(replica_id, l_time)` in `E.vclock`, `local_vc[replica_id] = max(local_vc.get(replica_id), l_time)`. Also, for any entry in `local_vc` not in `E.vclock`, it is retained.
+	•	Compare — Standard partial-order: `vc1 ≤ vc2` iff `∀r vc1.get(r).unwrap_or(0) ≤ vc2.get(r).unwrap_or(0)`. Concurrency exists when neither `vc1 ≤ vc2` nor `vc2 ≤ vc1` holds.
+Vector clocks are mandatory for robust conflict detection and causal ordering across replicas.
 
 ⸻
 
 8 Formal Verification & Conformance
 
 An implementation claims compliance when it:
-	1.	Passes the official test-vector suite (Lamport, overflow, hybrid sigs, rights algebra).
-	2.	Ships a machine-checked TLA+ model proving Safety & Liveness against invariants C-1…C-8.
-	3.	Includes property-based fuzz tests (e.g., QuickCheck) derived from traces of the TLA+ model.
-	4.	Preserves unknown Event fields bit-exact when relaying or re-serialising.
+	1.	Passes the official test-vector suite (Lamport logic, mandatory vector clocks, overflow behavior, hybrid signature rules from Amulet-Crypto, rights algebra stubs).
+	2.	Ships a machine-checked TLA+ model proving Safety & Liveness against invariants C-1…C-8 (updated for v0.5 semantics).
+	3.	Includes property-based fuzz tests (e.g., QuickCheck) derived from traces of the TLA+ model, covering mandatory vector clock scenarios.
+	4.	Preserves unknown Event fields (via `Event.reserved`) bit-exact when relaying or re-serialising.
 
 ⸻
 
 Appendix A — Compliance Profiles
 
-Profile	Suite	Time Ext	Notes
-Dev / PoC	CLASSIC	Lamport	Fastest builds
-Fed-Moderate	FIPS	Lamport	Today’s US federal needs
-Hybrid-2025	HYBRID	Vector	PQ-transition w/ concurrency detection
-Archive	PQC	Lamport	100-year durability
+Profile	Suite (Tag)	Time Model	Notes
+Dev / PoC	CLASSIC	Lamport + Vector	Fastest builds, full causal history
+Fed-Moderate	FIPS	Lamport + Vector	Today's US federal needs, full causal history
+Hybrid-2025	HYBRID	Lamport + Vector	PQ-transition w/ concurrency detection
+Archive	PQC	Lamport + Vector	100-year durability, full causal history
 
 
 ⸻

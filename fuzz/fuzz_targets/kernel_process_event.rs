@@ -3,8 +3,8 @@
 use libfuzzer_sys::fuzz_target;
 use amulet_core::{
     kernel::Kernel,
-    events::Event,
-    types::{AlgSuite, CID, ReplicaID, VectorClock},
+    primitives::{Event, VClock, CID, ReplicaID},
+    types::AlgSuite,
     crypto::PlaceholderCryptoProvider,
 };
 use std::collections::HashMap;
@@ -14,49 +14,42 @@ use arbitrary::Arbitrary;
 #[derive(Debug, Clone, Arbitrary)]
 struct FuzzEventInput {
     id: [u8; 32],
-    alg_suite_byte: u8, // To derive AlgSuite
+    alg_suite_byte: u8,
     replica: [u8; 16],
     caused_by: [u8; 32],
     lclock: u64,
-    new_entities: Vec<[u8; 32]>, // Vec<CID>
-    updated_entities: Vec<[u8; 32]>, // Vec<CID>
-    // For vector_clock: Option<HashMap<ReplicaID, u64>>
-    // We'll represent this as an Option of Vec of tuples for easier generation by Arbitrary
-    // and then convert it.
-    vector_clock_entries: Option<Vec<([u8; 16], u64)>>,
+    new_entities: Vec<[u8; 32]>,
+    updated_entities: Vec<[u8; 32]>,
+    vector_clock_entries: Vec<([u8; 16], u64)>,
+    reserved_data: Vec<u8>,
 }
 
 impl FuzzEventInput {
     fn to_event(&self) -> Event {
-        let alg_suite = match self.alg_suite_byte % 4 {
-            0 => AlgSuite::CLASSIC,
-            1 => AlgSuite::FIPS,
-            2 => AlgSuite::PQC,
-            _ => AlgSuite::HYBRID,
-        };
+        let alg_suite_tag = self.alg_suite_byte % 4;
 
-        let vector_clock: VectorClock = self.vector_clock_entries.as_ref().map(|entries| {
-            entries.iter().cloned().collect::<HashMap<ReplicaID, u64>>()
-        });
+        let vclock_map: HashMap<ReplicaID, u64> = self.vector_clock_entries.iter().cloned().collect();
+        let vclock = VClock(vclock_map);
 
         Event {
             id: self.id,
-            alg_suite,
+            alg_suite_tag,
             replica: self.replica,
             caused_by: self.caused_by,
             lclock: self.lclock,
             new_entities: self.new_entities.clone(),
             updated_entities: self.updated_entities.clone(),
-            vector_clock,
+            vclock,
+            reserved: self.reserved_data.clone(),
         }
     }
 }
 
 fuzz_target!(|data: FuzzEventInput| {
     // Create a kernel instance.
-    let replica_id_kernel: ReplicaID = [0u8; 16]; // Arbitrary kernel replica ID
+    let replica_id_kernel: ReplicaID = [0u8; 16];
     let mut kernel = Kernel::<PlaceholderCryptoProvider>::new_with_default_crypto(replica_id_kernel);
-    kernel.local_lc = data.lclock / 2; // Initialize kernel lclock to ensure merge logic is tested
+    kernel.local_lc = data.lclock / 2;
 
     // Construct the Event from fuzzed data.
     let event_to_process = data.to_event();
