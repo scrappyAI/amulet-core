@@ -1,14 +1,14 @@
-"""#![cfg(test)]
+#![cfg(test)]
 
 use proptest::prelude::*;
 use amulet_core::kernel::Kernel;
 use amulet_core::primitives::{
     Command, Capability, VClock, CidBytes, ReplicaIdBytes, SignatureBytes, PublicKeyBytes,
-    CID, ReplicaID, Signature, PublicKey,
+    CID, ReplicaID,
 };
 use amulet_core::types::AlgSuite;
 use amulet_core::command_traits::{EncodedCmd, CommandTraitError};
-use amulet_core::crypto::test_utils::ConfigurableCryptoProvider;
+use amulet_core::crypto::ConfigurableCryptoProvider;
 use amulet_core::crypto::CryptoError;
 use amulet_core::error::KernelError;
 use amulet_core::kernel::runtime::DefaultRuntime; // Using DefaultRuntime for these tests
@@ -99,7 +99,7 @@ fn arb_command(cap_cid: CID) -> impl Strategy<Value = Command<MockValidationCmd>
         Just(TEST_REPLICA_ID_CMD),     // replica (fixed)
         Just(cap_cid),         // capability CID (linked to the generated capability)
         any::<u64>(),          // lclock
-        prop::option::of(Just(VClock::default()).map(Some)), // vclock (Ensure it's Option<VClock>)
+        prop::option::of(Just(VClock::default())), // vclock (Corrected: generates Option<VClock>)
         prop::collection::vec(any::<u8>(), 0..32), // payload_data for MockValidationCmd
         any::<u32>(),          // required_rights_value for MockValidationCmd
         any::<[u8; 64]>()      // signature_bytes
@@ -135,7 +135,7 @@ proptest! {
         kernel.state.capabilities.insert(capability.id, capability.clone());
 
         // Generate a command linked to this capability using arb_command
-        let command_strategy = arb_command(capability.id);
+        let _command_strategy = arb_command(capability.id);
         // Fetch a command sample from the strategy.
         // Proptest typically runs this multiple times; for direct use, we might need a test_rng or similar.
         // However, within the proptest! macro, this is handled for us when `command_strategy` is used as an input.
@@ -179,7 +179,7 @@ proptest! {
         kernel.state.capabilities.insert(mutable_cap.id, mutable_cap.clone());
 
         // command_strategy here is not used in test logic directly, but shows how it could be used if the test was refactored
-        // let command_strategy = arb_command(mutable_cap.id); 
+        let _command_strategy = arb_command(mutable_cap.id);
 
         let command = Command {
             id: generate_test_cid(101),
@@ -206,4 +206,3 @@ proptest! {
         }
     }
 }
-"" 
